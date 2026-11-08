@@ -63,9 +63,10 @@ function of the gain. That is a feedback loop, and feedback loops oscillate.
 **Four separate fixes here, because it has four separate causes.**
 
 1. **A fixed EDR anchor.** A single pixel in the corner of each display permanently
-   requests the panel's full potential headroom, independent of the gain being applied.
-   Because the headroom request never changes, the granted headroom stops moving in
-   response to the gain, and the feedback loop is cut. (`Overlay.swift`, `DisplayOverlay`)
+    requests the panel's full potential headroom, independent of the gain being applied.
+  Because the anchor sits below the full-screen gain layer, its input is inversely
+  compensated so its final displayed value—and therefore its headroom request—stays
+  fixed as the slider moves. (`Overlay.swift`, `DisplayOverlay`)
 
 2. **Median filtering.** Headroom samples go through a 5-sample median rather than an
    average. A median throws away one-frame spikes entirely without adding the lag that

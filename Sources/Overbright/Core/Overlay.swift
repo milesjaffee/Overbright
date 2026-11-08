@@ -30,6 +30,11 @@ final class FlatEDRLayer {
         layer.framebufferOnly = true
         layer.maximumDrawableCount = 2
         layer.displaySyncEnabled = true
+        // The Metal overlay must update in the same Core Animation transaction as
+        // the desktop beneath it. Asynchronous presentation can briefly composite
+        // frames from different transactions, which appears as white flashing with
+        // the multiply blend on EDR displays.
+        layer.presentsWithTransaction = true
         layer.needsDisplayOnBoundsChange = true
         layer.allowsNextDrawableTimeout = true
 
@@ -58,9 +63,15 @@ final class FlatEDRLayer {
             pass.colorAttachments[0].clearColor =
                 MTLClearColor(red: value, green: value, blue: value, alpha: 1.0)
 
-            buffer.makeRenderCommandEncoder(descriptor: pass)?.endEncoding()
-            buffer.present(drawable)
+            guard let encoder = buffer.makeRenderCommandEncoder(descriptor: pass) else { return }
+            encoder.endEncoding()
+
+            // With presentsWithTransaction enabled, present only after Metal has
+            // scheduled the render commands, and use MTLDrawable.present() rather
+            // than MTLCommandBuffer.present(_:), which doesn't wait for a CA transaction.
             buffer.commit()
+            buffer.waitUntilScheduled()
+            drawable.present()
             lastColor = value
         }
     }
@@ -125,9 +136,10 @@ final class OverlayWindow: NSWindow {
 /// headroom while EDR content is actually on screen, and it grants roughly as much as
 /// the content asks for. If the only EDR content is the gain layer itself, then the
 /// amount of headroom available is a function of the gain you are currently applying —
-/// a feedback loop that oscillates. The anchor asks for the panel's full potential
-/// headroom at all times and never changes, so the granted headroom stays flat and the
-/// gain can move independently of it.
+/// a feedback loop that oscillates. The anchor keeps its final displayed value at the
+/// panel's potential headroom. It is below the full-screen gain window, so its input is
+/// inversely compensated as gain changes; otherwise the anchor itself would be
+/// multiplied past the panel's limit.
 final class DisplayOverlay {
 
     let displayID: CGDirectDisplayID
@@ -217,7 +229,11 @@ final class DisplayOverlay {
     func apply(gain: Double, anchorRequest: Double) {
         guard isMounted else { return }
         gainLayer?.render(value: gain)
-        anchorLayer?.render(value: anchorRequest)
+        // The anchor sits below the full-screen multiply layer. Keep its final
+        // displayed value fixed instead of letting it exceed requested EDR headroom
+        // as the user raises brightness.
+        let anchorInput = anchorRequest / max(1.0, gain)
+        anchorLayer?.render(value: anchorInput)
     }
 
     /// Re-asserts window ordering and geometry. Cheap, and the cure for a whole family
