@@ -1,6 +1,6 @@
 import AppKit
-import CoreImage
 import Metal
+import MetalKit
 import QuartzCore
 
 // MARK: - Flat EDR colour renderer
@@ -74,6 +74,74 @@ final class FlatEDRLayer {
     }
 }
 
+// MARK: - Full-screen gain view
+
+/// The surface that multiplies everything behind it.
+///
+/// This exact setup is the one that works: an MTKView whose CAMetalLayer has a white
+/// background and Core Animation's `"multiply"` compositing filter. These alternatives
+/// were all tested side by side and failed to multiply the windows *behind* the overlay:
+/// `CIMultiplyBlendMode` and `"multiplyBlendMode"` (white boxes or a white screen, since a
+/// blend mode returns the source wherever its backdrop is transparent),
+/// `CIMultiplyCompositing` (no effect), and `"multiply"` on a bare layer-hosting
+/// CAMetalLayer (no effect).
+final class GainView: MTKView {
+
+    private let queue: MTLCommandQueue
+    private var lastValue: Double = .nan
+
+    init?(frame: NSRect, device: MTLDevice) {
+        guard let queue = device.makeCommandQueue() else { return nil }
+        self.queue = queue
+        super.init(frame: frame, device: device)
+
+        colorPixelFormat = .rgba16Float
+        colorspace = CGColorSpace(name: CGColorSpace.extendedLinearDisplayP3)
+        autoresizingMask = [.width, .height]
+        framebufferOnly = true
+
+        // Draw only when the gain moves, not on a display-link timer.
+        isPaused = true
+        enableSetNeedsDisplay = false
+
+        guard let layer = layer as? CAMetalLayer else { return nil }
+        layer.wantsExtendedDynamicRangeContent = true
+        layer.isOpaque = false
+        // White is the multiply identity, so anything not yet covered by a drawable
+        // leaves the screen unchanged instead of blacking it out.
+        layer.backgroundColor = CGColor(red: 1, green: 1, blue: 1, alpha: 1)
+        layer.compositingFilter = "multiply"
+    }
+
+    required init(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    /// - Parameter value: linear light multiplier. 1.0 is a no-op, >1.0 asks the panel
+    ///   for EDR headroom, <1.0 dims below whatever the hardware floor is.
+    func render(value: Double, force: Bool = false) {
+        // Redrawing on every display refresh would cost battery for no reason. Only
+        // touch the GPU when the number actually moved.
+        if !force, abs(value - lastValue) < 0.0015 { return }
+        clearColor = MTLClearColor(red: value, green: value, blue: value, alpha: 1.0)
+        draw()
+        lastValue = value
+    }
+
+    func invalidate() { lastValue = .nan }
+
+    override func draw(_ dirtyRect: NSRect) {
+        autoreleasepool {
+            guard let pass = currentRenderPassDescriptor,
+                  let drawable = currentDrawable,
+                  let buffer = queue.makeCommandBuffer(),
+                  let encoder = buffer.makeRenderCommandEncoder(descriptor: pass) else { return }
+            // The clear is the whole image; see FlatEDRLayer.
+            encoder.endEncoding()
+            buffer.present(drawable)
+            buffer.commit()
+        }
+    }
+}
+
 // MARK: - Window
 
 /// Borderless, click-through, capture-excluded window that never takes focus.
@@ -135,7 +203,7 @@ final class DisplayOverlay {
 
     private var gainWindow: OverlayWindow?
     private var anchorWindow: OverlayWindow?
-    private var gainLayer: FlatEDRLayer?
+    private var gainView: GainView?
     private var anchorLayer: FlatEDRLayer?
 
     private(set) var isMounted = false
@@ -157,30 +225,15 @@ final class DisplayOverlay {
     func mount() {
         guard !isMounted, let screen = DisplayInventory.screen(for: displayID) else { return }
 
-        let gainLayer = FlatEDRLayer(device: device)
+        let gainView = GainView(frame: CGRect(origin: .zero, size: screen.frame.size), device: device)
         let anchorLayer = FlatEDRLayer(device: device)
-        guard let gainLayer, let anchorLayer else {
+        guard let gainView, let anchorLayer else {
             Log.overlay.error("Metal layer creation failed for display \(self.displayID)")
             return
         }
 
         let gainWindow = OverlayWindow(frame: screen.frame, level: Self.gainLevel)
-        let gainView = NSView(frame: CGRect(origin: .zero, size: screen.frame.size))
-        // Set the composite filter on the AppKit view, not the CAMetalLayer. AppKit's
-        // NSView.compositingFilter supplies the view content and the actual backdrop
-        // to Core Image; assigning a bare filter to CAMetalLayer leaves that backdrop
-        // unavailable and can turn the overlay into an opaque white surface.
-        guard let multiplyFilter = CIFilter(name: "CIMultiplyBlendMode") else {
-            Log.overlay.error("Core Image multiply filter unavailable")
-            return
-        }
-        gainView.compositingFilter = multiplyFilter
-        // Order matters: assigning the layer first makes this a layer-hosting view.
-        // Setting wantsLayer first would make AppKit create its own layer and discard ours.
-        gainView.layer = gainLayer.layer
-        gainView.wantsLayer = true
         gainWindow.contentView = gainView
-        gainLayer.resize(to: screen.frame.size, scale: screen.backingScaleFactor)
 
         // One point in the bottom-left corner. At 2x backing scale that is a 2x2 block
         // of physical pixels, which mini-LED local dimming keeps confined to a single
@@ -196,10 +249,10 @@ final class DisplayOverlay {
 
         self.gainWindow = gainWindow
         self.anchorWindow = anchorWindow
-        self.gainLayer = gainLayer
+        self.gainView = gainView
         self.anchorLayer = anchorLayer
 
-        gainLayer.render(value: 1.0, force: true)
+        gainView.render(value: 1.0, force: true)
         anchorLayer.render(value: 1.0, force: true)
 
         anchorWindow.orderFrontRegardless()
@@ -213,7 +266,7 @@ final class DisplayOverlay {
         anchorWindow?.orderOut(nil)
         gainWindow = nil
         anchorWindow = nil
-        gainLayer = nil
+        gainView = nil
         anchorLayer = nil
         isMounted = false
         Log.overlay.info("Unmounted overlay on display \(self.displayID)")
@@ -225,7 +278,7 @@ final class DisplayOverlay {
     ///     the panel is not kept in a high-power EDR state for nothing.
     func apply(gain: Double, anchorRequest: Double) {
         guard isMounted else { return }
-        gainLayer?.render(value: gain)
+        gainView?.render(value: gain)
         // The anchor sits below the full-screen multiply layer. Keep its final
         // displayed value fixed instead of letting it exceed requested EDR headroom
         // as the user raises brightness.
@@ -240,7 +293,7 @@ final class DisplayOverlay {
 
         if gainWindow?.frame != screen.frame {
             gainWindow?.setFrame(screen.frame, display: true)
-            gainLayer?.resize(to: screen.frame.size, scale: screen.backingScaleFactor)
+            gainView?.invalidate()
         }
         anchorWindow?.setFrameOrigin(screen.frame.origin)
 
@@ -249,7 +302,7 @@ final class DisplayOverlay {
     }
 
     func forceRedraw() {
-        gainLayer?.invalidate()
+        gainView?.invalidate()
         anchorLayer?.invalidate()
     }
 }

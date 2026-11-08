@@ -19,7 +19,7 @@ normally caps SDR content — that is, everything except HDR video — at about 
 only opens the rest of the range when something on screen is genuinely HDR.
 
 Overbright puts a transparent full-screen layer over your desktop that is registered as
-HDR content and composites with a **multiply** blend. The panel opens its extended range
+HDR content and **multiplies** with what is beneath it. The panel opens its extended range
 because there is real EDR content on screen, and every pixel underneath gets multiplied by
 your chosen gain. Multiply is the important part: `black × 2.0` is still black, so
 contrast and colour survive. Overlays that paint white over the screen instead of
@@ -221,8 +221,11 @@ The renderer is worth a note: it draws a flat colour using nothing but the rende
 clear value. No shaders, no vertex buffers, no draw calls. `MTLClearColor(red: g, green:
 g, blue: g, alpha: 1)` into an `rgba16Float` `CAMetalLayer` with
 `wantsExtendedDynamicRangeContent = true` and an extended linear Display P3 colour space,
-with Core Image's `CIMultiplyBlendMode` compositing filter on the layer-hosting view. That
-is the entire brightness mechanism.
+hosted by an `MTKView` whose layer has a white background and Core Animation's
+`"multiply"` compositing filter. That is the entire brightness mechanism. The exact setup
+matters: `CIMultiplyBlendMode` and `"multiplyBlendMode"` paint white wherever they get no
+backdrop, and `CIMultiplyCompositing` or `"multiply"` on a bare layer-hosting
+`CAMetalLayer` leave the windows behind the overlay untouched.
 
 ### The gain curve
 
