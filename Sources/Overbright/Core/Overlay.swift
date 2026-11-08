@@ -30,15 +30,13 @@ final class FlatEDRLayer {
         layer.framebufferOnly = true
         layer.maximumDrawableCount = 2
         layer.displaySyncEnabled = true
-        // The Metal overlay must update in the same Core Animation transaction as
-        // the desktop beneath it. Asynchronous presentation can briefly composite
-        // frames from different transactions, which appears as white flashing with
-        // the multiply blend on EDR displays.
-        layer.presentsWithTransaction = true
         layer.needsDisplayOnBoundsChange = true
         layer.allowsNextDrawableTimeout = true
 
         if multiplyBlend {
+            // Use Core Animation's built-in blend-mode alias. Passing a bare
+            // CIMultiplyBlendMode filter here produced an opaque white layer on some
+            // systems because its background-image input isn't supplied by CALayer.
             layer.compositingFilter = "multiplyBlendMode"
         }
     }
@@ -66,12 +64,11 @@ final class FlatEDRLayer {
             guard let encoder = buffer.makeRenderCommandEncoder(descriptor: pass) else { return }
             encoder.endEncoding()
 
-            // With presentsWithTransaction enabled, present only after Metal has
-            // scheduled the render commands, and use MTLDrawable.present() rather
-            // than MTLCommandBuffer.present(_:), which doesn't wait for a CA transaction.
+            // Let CAMetalLayer schedule presentation normally instead of coupling this
+            // screen-sized surface to unrelated AppKit damage transactions, such as
+            // pointer updates.
+            buffer.present(drawable)
             buffer.commit()
-            buffer.waitUntilScheduled()
-            drawable.present()
             lastColor = value
         }
     }

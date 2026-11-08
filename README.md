@@ -29,6 +29,11 @@ Below 1.0× the same layer multiplies *down*, which needs no EDR at all. That ha
 slider works on any Mac — Airs, Minis with third-party monitors, Intel machines — because
 it is just arithmetic in the compositor.
 
+## Emergency quit
+
+If the overlay obscures the menu bar, press **Command-Option-Control-Escape**
+(**⌘⌥⌃Esc**) to quit Overbright immediately and remove its overlays.
+
 ## What it does not do
 
 - **No gamma tables.** See the note below; this is a deliberate architectural choice.

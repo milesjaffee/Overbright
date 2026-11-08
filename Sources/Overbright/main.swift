@@ -4,10 +4,16 @@ import AppKit
 final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private let menuBar = MenuBarController()
+    private let emergencyQuitHotKey = EmergencyQuitHotKey()
     private var watcher: SystemWatcher?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
+        guard emergencyQuitHotKey.install() else {
+            Log.system.error("Emergency quit shortcut unavailable; refusing to mount overlays")
+            NSApp.terminate(nil)
+            return
+        }
 
         menuBar.install()
 
@@ -22,6 +28,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        emergencyQuitHotKey.uninstall()
         // Nothing to undo. The only state this app owns is a pair of windows per
         // display, and windows die with the process — including if it is force quit or
         // crashes. That is the main reason this app does not touch the display gamma
