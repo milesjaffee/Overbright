@@ -182,7 +182,9 @@ here is done entirely in the compositor.
 **Fix.** Automatic pause when `ProcessInfo.thermalState` reaches serious or critical, with
 automatic resume; optional pause in Low Power Mode; the EDR anchor is only lit while a
 boost is actually wanted, so the panel is not held in a high-power state at 1.0×; and
-redraws only happen when the gain actually changes, not every frame.
+the gain layer is a single stretched pixel, redrawn at 5 Hz (plus immediately when the
+gain changes) rather than every frame. The 5 Hz redraw is required: a static layer lets
+macOS recomposite small regions underneath without the multiply, which flickers.
 
 ---
 

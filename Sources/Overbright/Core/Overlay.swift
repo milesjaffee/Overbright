@@ -100,9 +100,17 @@ final class GainView: MTKView {
         autoresizingMask = [.width, .height]
         framebufferOnly = true
 
-        // Draw only when the gain moves, not on a display-link timer.
-        isPaused = true
-        enableSetNeedsDisplay = false
+        // A flat colour needs one pixel; the layer stretches it over the screen. That
+        // keeps each redraw nearly free, which matters because of the keep-alive below.
+        autoResizeDrawable = false
+        drawableSize = CGSize(width: 1, height: 1)
+
+        // Keep-alive redraw. If the layer is left static, WindowServer recomposites
+        // small damaged regions underneath (menu bar clock and status items, app
+        // repaints) without applying our filter, which shows up as randomly flickering
+        // un-multiplied boxes. Presenting a fresh drawable a few times a second stops
+        // that; 5 Hz was as effective as redrawing every display frame in testing.
+        preferredFramesPerSecond = 5
 
         guard let layer = layer as? CAMetalLayer else { return nil }
         layer.wantsExtendedDynamicRangeContent = true
@@ -118,8 +126,8 @@ final class GainView: MTKView {
     /// - Parameter value: linear light multiplier. 1.0 is a no-op, >1.0 asks the panel
     ///   for EDR headroom, <1.0 dims below whatever the hardware floor is.
     func render(value: Double, force: Bool = false) {
-        // Redrawing on every display refresh would cost battery for no reason. Only
-        // touch the GPU when the number actually moved.
+        // The keep-alive timer redraws anyway; drawing immediately as well only matters
+        // when the number moved, so a ramp isn't quantised to 5 Hz steps.
         if !force, abs(value - lastValue) < 0.0015 { return }
         clearColor = MTLClearColor(red: value, green: value, blue: value, alpha: 1.0)
         draw()
