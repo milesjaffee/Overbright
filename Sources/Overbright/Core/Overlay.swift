@@ -1,4 +1,5 @@
 import AppKit
+import CoreImage
 import Metal
 import QuartzCore
 
@@ -13,11 +14,7 @@ final class FlatEDRLayer {
     private let queue: MTLCommandQueue?
     private var lastColor: Double = .nan
 
-    /// - Parameter multiplyBlend: when true the layer multiplies with whatever is
-    ///   underneath it instead of painting over it. This is the difference between
-    ///   "the screen is brighter" and "someone put a sheet of tracing paper on it":
-    ///   `backdrop x 1.0 = backdrop`, so blacks stay black and colours keep their hue.
-    init?(device: MTLDevice, multiplyBlend: Bool) {
+    init?(device: MTLDevice) {
         guard let queue = device.makeCommandQueue() else { return nil }
         self.queue = queue
 
@@ -33,12 +30,6 @@ final class FlatEDRLayer {
         layer.needsDisplayOnBoundsChange = true
         layer.allowsNextDrawableTimeout = true
 
-        if multiplyBlend {
-            // Use Core Animation's built-in blend-mode alias. Passing a bare
-            // CIMultiplyBlendMode filter here produced an opaque white layer on some
-            // systems because its background-image input isn't supplied by CALayer.
-            layer.compositingFilter = "multiplyBlendMode"
-        }
     }
 
     /// - Parameter value: linear light multiplier. 1.0 is a no-op, >1.0 asks the panel
@@ -166,8 +157,8 @@ final class DisplayOverlay {
     func mount() {
         guard !isMounted, let screen = DisplayInventory.screen(for: displayID) else { return }
 
-        let gainLayer = FlatEDRLayer(device: device, multiplyBlend: true)
-        let anchorLayer = FlatEDRLayer(device: device, multiplyBlend: false)
+        let gainLayer = FlatEDRLayer(device: device)
+        let anchorLayer = FlatEDRLayer(device: device)
         guard let gainLayer, let anchorLayer else {
             Log.overlay.error("Metal layer creation failed for display \(self.displayID)")
             return
@@ -175,6 +166,15 @@ final class DisplayOverlay {
 
         let gainWindow = OverlayWindow(frame: screen.frame, level: Self.gainLevel)
         let gainView = NSView(frame: CGRect(origin: .zero, size: screen.frame.size))
+        // Set the composite filter on the AppKit view, not the CAMetalLayer. AppKit's
+        // NSView.compositingFilter supplies the view content and the actual backdrop
+        // to Core Image; assigning a bare filter to CAMetalLayer leaves that backdrop
+        // unavailable and can turn the overlay into an opaque white surface.
+        guard let multiplyFilter = CIFilter(name: "CIMultiplyBlendMode") else {
+            Log.overlay.error("Core Image multiply filter unavailable")
+            return
+        }
+        gainView.compositingFilter = multiplyFilter
         // Order matters: assigning the layer first makes this a layer-hosting view.
         // Setting wantsLayer first would make AppKit create its own layer and discard ours.
         gainView.layer = gainLayer.layer

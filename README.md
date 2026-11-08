@@ -221,8 +221,8 @@ The renderer is worth a note: it draws a flat colour using nothing but the rende
 clear value. No shaders, no vertex buffers, no draw calls. `MTLClearColor(red: g, green:
 g, blue: g, alpha: 1)` into an `rgba16Float` `CAMetalLayer` with
 `wantsExtendedDynamicRangeContent = true` and an extended linear Display P3 colour space,
-with `compositingFilter = "multiplyBlendMode"` on the layer. That is the entire brightness
-mechanism.
+with Core Image's `CIMultiplyBlendMode` compositing filter on the layer-hosting view. That
+is the entire brightness mechanism.
 
 ### The gain curve
 
